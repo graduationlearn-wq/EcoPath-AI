@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EcoPath AI - Route Calculator</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -106,6 +108,15 @@
         
         .results.show {
             display: block;
+        }
+        
+        #mapContainer {
+            width: 100%;
+            height: 400px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+            background: white;
         }
         
         .route-card {
@@ -308,141 +319,231 @@
         <div class="error" id="error"></div>
         
         <div class="results" id="results">
+            <div id="mapContainer"></div>
             <div id="routesList"></div>
         </div>
     </div>
     
     <script>
-        const form = document.getElementById('routeForm');
-        const loading = document.getElementById('loading');
-        const error = document.getElementById('error');
-        const results = document.getElementById('results');
-        const routesList = document.getElementById('routesList');
+    const form = document.getElementById('routeForm');
+    const loading = document.getElementById('loading');
+    const error = document.getElementById('error');
+    const results = document.getElementById('results');
+    const routesList = document.getElementById('routesList');
+    const mapContainer = document.getElementById('mapContainer');
+    
+    let map = null;
+    
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
         
-        form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            loading.classList.add('show');
-            error.classList.remove('show');
-            results.classList.remove('show');
-            
-            const payload = {
-                origin: {
-                    latitude: parseFloat(document.getElementById('originLat').value),
-                    longitude: parseFloat(document.getElementById('originLon').value),
-                    address: document.getElementById('originAddress').value,
-                },
-                destination: {
-                    latitude: parseFloat(document.getElementById('destLat').value),
-                    longitude: parseFloat(document.getElementById('destLon').value),
-                    address: document.getElementById('destAddress').value,
-                },
-                departure_time: new Date().toISOString(),
-                preferences: {
-                    vehicle_type: document.getElementById('vehicleType').value,
-                    allow_carpool: true,
-                    allow_multimodal: true,
-                }
-            };
-            
-            try {
-                const response = await fetch('http://localhost:8000/api/v1/routes/calculate', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(payload),
-                });
-                
-                if (!response.ok) {
-                    throw new Error(`API error: ${response.status}`);
-                }
-                
-                const data = await response.json();
-                
-                loading.classList.remove('show');
-                
-                if (data.status === 'success') {
-                    displayRoutes(data.routes);
-                    results.classList.add('show');
-                } else {
-                    showError(data.message || 'Failed to calculate routes');
-                }
-            } catch (err) {
-                loading.classList.remove('show');
-                showError(`Error: ${err.message}`);
+        loading.classList.add('show');
+        error.classList.remove('show');
+        results.classList.remove('show');
+        
+        const originLat = parseFloat(document.getElementById('originLat').value);
+        const originLon = parseFloat(document.getElementById('originLon').value);
+        const destLat = parseFloat(document.getElementById('destLat').value);
+        const destLon = parseFloat(document.getElementById('destLon').value);
+        
+        const payload = {
+            origin: {
+                latitude: originLat,
+                longitude: originLon,
+                address: document.getElementById('originAddress').value,
+            },
+            destination: {
+                latitude: destLat,
+                longitude: destLon,
+                address: document.getElementById('destAddress').value,
+            },
+            departure_time: new Date().toISOString(),
+            preferences: {
+                vehicle_type: document.getElementById('vehicleType').value,
+                allow_carpool: true,
+                allow_multimodal: true,
             }
-        });
+        };
         
-        function displayRoutes(routes) {
-            routesList.innerHTML = '';
+        try {
+            const response = await fetch('http://localhost:8000/api/v1/routes/calculate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload),
+            });
             
-            routes.forEach(route => {
-                const routeHTML = `
-                    <div class="route-card">
-                        <div class="route-header">
-                            <div class="route-rank">#${route.rank}</div>
-                            <div class="route-title">
-                                <h3>${route.summary.route_type.toUpperCase()}</h3>
-                                <p>${route.summary.total_distance_km} km · ${route.summary.estimated_time_minutes} min</p>
-                            </div>
-                            <div class="eco-score">
-                                Eco-Score: ${route.summary.eco_cost_score.toFixed(2)}
-                            </div>
+            if (!response.ok) {
+                throw new Error(`API error: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            loading.classList.remove('show');
+            
+            if (data.status === 'success') {
+                results.classList.add('show');
+                displayRoutes(data.routes, originLat, originLon, destLat, destLon);
+            } else {
+                showError(data.message || 'Failed to calculate routes');
+            }
+        } catch (err) {
+            loading.classList.remove('show');
+            showError(`Error: ${err.message}`);
+        }
+    });
+    
+    function initMap(centerLat, centerLon) {
+        // Remove old map instance if exists
+        if (map !== null) {
+            map.off();
+            map.remove();
+            map = null;
+        }
+        
+        // Create map
+        map = L.map('mapContainer').setView([centerLat, centerLon], 13);
+        
+        // Add OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19,
+        }).addTo(map);
+    }
+    
+    function displayRoutes(routes, originLat, originLon, destLat, destLon) {
+        // Show results first
+        results.classList.add('show');
+        
+        // Initialize map
+        const centerLat = (originLat + destLat) / 2;
+        const centerLon = (originLon + destLon) / 2;
+        
+        // Ensure map container is visible before init
+        setTimeout(() => {
+            initMap(centerLat, centerLon);
+            
+            if (!map) {
+                console.error('Map failed to initialize');
+                return;
+            }
+            
+            // Add origin marker (green)
+            L.circleMarker([originLat, originLon], {
+                radius: 10,
+                fillColor: '#27ae60',
+                color: '#fff',
+                weight: 3,
+                opacity: 1,
+                fillOpacity: 0.9
+            }).addTo(map).bindPopup('<b>📍 Origin</b>');
+            
+            // Add destination marker (red)
+            L.circleMarker([destLat, destLon], {
+                radius: 10,
+                fillColor: '#e74c3c',
+                color: '#fff',
+                weight: 3,
+                opacity: 1,
+                fillOpacity: 0.9
+            }).addTo(map).bindPopup('<b>🎯 Destination</b>');
+            
+            // Draw route line
+            // Draw route line using actual coordinates
+if (routes.length > 0 && routes[0].route_coordinates) {
+    const routeCoords = routes[0].route_coordinates.map(coord => 
+        [coord.latitude, coord.longitude]
+    );
+    
+    if (routeCoords.length > 0) {
+        L.polyline(routeCoords, {
+            color: '#667eea',
+            weight: 5,
+            opacity: 0.8,
+            dashArray: '5, 10'
+        }).addTo(map);
+    }
+}
+            
+            // Fit bounds
+            const bounds = L.latLngBounds(
+                [originLat, originLon],
+                [destLat, destLon]
+            );
+            map.fitBounds(bounds, { padding: [50, 50] });
+            
+        }, 100);
+        
+        // Display route cards
+        routesList.innerHTML = '';
+        
+        routes.forEach(route => {
+            const routeHTML = `
+                <div class="route-card">
+                    <div class="route-header">
+                        <div class="route-rank">#${route.rank}</div>
+                        <div class="route-title">
+                            <h3>${route.summary.route_type.toUpperCase()}</h3>
+                            <p>${route.summary.total_distance_km} km · ${route.summary.estimated_time_minutes} min</p>
                         </div>
-                        
-                        <div class="route-details">
-                            <div class="detail-item">
-                                <label>Distance</label>
-                                <value>${route.summary.total_distance_km} km</value>
-                            </div>
-                            <div class="detail-item">
-                                <label>Time</label>
-                                <value>${route.summary.estimated_time_minutes} min</value>
-                            </div>
-                            <div class="detail-item">
-                                <label>CO₂ Emissions</label>
-                                <value>${route.summary.estimated_co2_kg} kg</value>
-                            </div>
-                            <div class="detail-item">
-                                <label>Route Type</label>
-                                <value>${route.summary.route_type}</value>
-                            </div>
-                        </div>
-                        
-                        <div class="breakdown">
-                            <h4>Eco-Cost Breakdown</h4>
-                            <div class="component">
-                                <span class="component-name">🚗 Traffic Penalty</span>
-                                <span class="component-value penalty">+${route.eco_cost_breakdown.traffic_penalty.toFixed(2)}</span>
-                            </div>
-                            <div class="component">
-                                <span class="component-name">😷 AQI Penalty</span>
-                                <span class="component-value penalty">+${route.eco_cost_breakdown.aqi_penalty.toFixed(2)}</span>
-                            </div>
-                            <div class="component">
-                                <span class="component-name">⛰️ Gradient Penalty</span>
-                                <span class="component-value penalty">+${route.eco_cost_breakdown.gradient_penalty.toFixed(2)}</span>
-                            </div>
-                            <div class="component">
-                                <span class="component-name">🤝 Carpool Bonus</span>
-                                <span class="component-value bonus">${route.eco_cost_breakdown.carpool_bonus.toFixed(2)}</span>
-                            </div>
-                            <div class="component">
-                                <span class="component-name">🌳 Greenery Bonus</span>
-                                <span class="component-value bonus">${route.eco_cost_breakdown.greenery_bonus.toFixed(2)}</span>
-                            </div>
+                        <div class="eco-score">
+                            Eco-Score: ${route.summary.eco_cost_score.toFixed(2)}
                         </div>
                     </div>
-                `;
-                routesList.innerHTML += routeHTML;
-            });
-        }
-        
-        function showError(message) {
-            error.textContent = message;
-            error.classList.add('show');
-        }
-    </script>
+                    
+                    <div class="route-details">
+                        <div class="detail-item">
+                            <label>Distance</label>
+                            <value>${route.summary.total_distance_km} km</value>
+                        </div>
+                        <div class="detail-item">
+                            <label>Time</label>
+                            <value>${route.summary.estimated_time_minutes} min</value>
+                        </div>
+                        <div class="detail-item">
+                            <label>CO₂ Emissions</label>
+                            <value>${route.summary.estimated_co2_kg} kg</value>
+                        </div>
+                        <div class="detail-item">
+                            <label>Route Type</label>
+                            <value>${route.summary.route_type}</value>
+                        </div>
+                    </div>
+                    
+                    <div class="breakdown">
+                        <h4>Eco-Cost Breakdown</h4>
+                        <div class="component">
+                            <span class="component-name">🚗 Traffic Penalty</span>
+                            <span class="component-value penalty">+${route.eco_cost_breakdown.traffic_penalty.toFixed(2)}</span>
+                        </div>
+                        <div class="component">
+                            <span class="component-name">😷 AQI Penalty</span>
+                            <span class="component-value penalty">+${route.eco_cost_breakdown.aqi_penalty.toFixed(2)}</span>
+                        </div>
+                        <div class="component">
+                            <span class="component-name">⛰️ Gradient Penalty</span>
+                            <span class="component-value penalty">+${route.eco_cost_breakdown.gradient_penalty.toFixed(2)}</span>
+                        </div>
+                        <div class="component">
+                            <span class="component-name">🤝 Carpool Bonus</span>
+                            <span class="component-value bonus">${route.eco_cost_breakdown.carpool_bonus.toFixed(2)}</span>
+                        </div>
+                        <div class="component">
+                            <span class="component-name">🌳 Greenery Bonus</span>
+                            <span class="component-value bonus">${route.eco_cost_breakdown.greenery_bonus.toFixed(2)}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            routesList.innerHTML += routeHTML;
+        });
+    }
+    
+    function showError(message) {
+        error.textContent = message;
+        error.classList.add('show');
+    }
+</script>
 </body>
 </html>

@@ -3,7 +3,7 @@ Pydantic schemas for route API.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 
 
@@ -53,6 +53,7 @@ class RouteOption(BaseModel):
     rank: int
     summary: RouteSummary
     eco_cost_breakdown: EcoCostBreakdown
+    route_coordinates: Optional[List[Dict]] = Field(default_factory=list, description="Route waypoints with lat/lon")
 
 
 class RouteCalculationResponse(BaseModel):

@@ -63,21 +63,25 @@ class RouteService:
         # Get route details
         details = self.pathfinder.get_route_details(route)
         
-        # Build eco-cost breakdown (use first segment as example)
-        if details['segments']:
-            first_segment = details['segments'][0]
-            breakdown = EcoCostBreakdown(
-                traffic_penalty=30.0,
-                aqi_penalty=25.0,
-                gradient_penalty=5.0,
-                carpool_bonus=-10.0,
-                greenery_bonus=-12.0,
-            )
-        else:
-            breakdown = EcoCostBreakdown(
-                traffic_penalty=0, aqi_penalty=0, gradient_penalty=0,
-                carpool_bonus=0, greenery_bonus=0,
-            )
+        # Get node coordinates for the route
+        route_coordinates = []
+        for node_id in route:
+            node_data = self.graph.get_node_data(node_id)
+            if node_data:
+                route_coordinates.append({
+                    'latitude': node_data['latitude'],
+                    'longitude': node_data['longitude'],
+                    'name': node_data.get('name', node_id)
+                })
+        
+        # Build eco-cost breakdown
+        breakdown = EcoCostBreakdown(
+            traffic_penalty=30.0,
+            aqi_penalty=25.0,
+            gradient_penalty=5.0,
+            carpool_bonus=-10.0,
+            greenery_bonus=-12.0,
+        )
         
         # Build summary
         summary = RouteSummary(
@@ -88,12 +92,13 @@ class RouteService:
             eco_cost_score=details['total_eco_cost'],
         )
         
-        # Build route option
+        # Build route option with coordinates
         route_option = RouteOption(
             route_id=f"route_{start_node}_{goal_node}",
             rank=1,
             summary=summary,
             eco_cost_breakdown=breakdown,
+            route_coordinates=route_coordinates,
         )
         
         return [route_option]
