@@ -24,7 +24,10 @@ class Settings(BaseSettings):
     WEIGHT_GRADIENT_BASE: float = float(os.getenv("WEIGHT_GRADIENT_BASE", "0.2"))
     WEIGHT_CARPOOL_BASE: float = float(os.getenv("WEIGHT_CARPOOL_BASE", "0.1"))
     WEIGHT_GREENERY_BASE: float = float(os.getenv("WEIGHT_GREENERY_BASE", "0.15"))
-    
+
+    # External API Keys
+    OPENWEATHER_API_KEY: str = os.getenv("OPENWEATHER_API_KEY", "")
+
     class Config:
         env_file = ".env"
 
