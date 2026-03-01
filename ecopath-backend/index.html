@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcoPath AI - Route Calculator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        
+        .form-card {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        input, select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 14px 40px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .results {
+            display: none;
+        }
+        
+        .results.show {
+            display: block;
+        }
+        
+        .route-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+        }
+        
+        .route-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .route-rank {
+            background: #667eea;
+            color: white;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+        
+        .route-title {
+            flex: 1;
+            margin-left: 15px;
+        }
+        
+        .route-title h3 {
+            color: #333;
+            margin-bottom: 5px;
+        }
+        
+        .eco-score {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 6px;
+            text-align: right;
+            font-weight: 600;
+        }
+        
+        .route-details {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .detail-item {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .detail-item label {
+            font-size: 0.85em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        
+        .detail-item value {
+            font-size: 1.3em;
+            font-weight: 600;
+            color: #333;
+            display: block;
+        }
+        
+        .breakdown {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+        }
+        
+        .breakdown h4 {
+            color: #333;
+            margin-bottom: 12px;
+            font-size: 0.95em;
+        }
+        
+        .component {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 0.9em;
+        }
+        
+        .component-name {
+            color: #666;
+        }
+        
+        .component-value {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .penalty {
+            color: #e74c3c;
+        }
+        
+        .bonus {
+            color: #27ae60;
+        }
+        
+        .loading {
+            text-align: center;
+            color: white;
+            font-size: 1.1em;
+            display: none;
+        }
+        
+        .loading.show {
+            display: block;
+        }
+        
+        .error {
+            background: #fee;
+            color: #c33;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .error.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌱 EcoPath AI</h1>
+            <p>Navigate for a Greener Tomorrow</p>
+        </div>
+        
+        <div class="form-card">
+            <form id="routeForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Origin Address</label>
+                        <input type="text" id="originAddress" placeholder="e.g., Connaught Place, Delhi" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Destination Address</label>
+                        <input type="text" id="destAddress" placeholder="e.g., India Gate, Delhi" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Origin Latitude</label>
+                        <input type="number" id="originLat" step="0.0001" placeholder="28.6139" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Origin Longitude</label>
+                        <input type="number" id="originLon" step="0.0001" placeholder="77.2090" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Destination Latitude</label>
+                        <input type="number" id="destLat" step="0.0001" placeholder="28.5244" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Destination Longitude</label>
+                        <input type="number" id="destLon" step="0.0001" placeholder="77.1855" required>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>Vehicle Type</label>
+                    <select id="vehicleType">
+                        <option value="ice">Gas (ICE)</option>
+                        <option value="ev">Electric (EV)</option>
+                        <option value="hybrid">Hybrid</option>
+                    </select>
+                </div>
+                
+                <button type="submit">Calculate Eco-Optimal Routes</button>
+            </form>
+        </div>
+        
+        <div class="loading" id="loading">
+            ⏳ Calculating routes... Please wait
+        </div>
+        
+        <div class="error" id="error"></div>
+        
+        <div class="results" id="results">
+            <div id="routesList"></div>
+        </div>
+    </div>
+    
+    <script>
+        const form = document.getElementById('routeForm');
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error');
+        const results = document.getElementById('results');
+        const routesList = document.getElementById('routesList');
+        
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            loading.classList.add('show');
+            error.classList.remove('show');
+            results.classList.remove('show');
+            
+            const payload = {
+                origin: {
+                    latitude: parseFloat(document.getElementById('originLat').value),
+                    longitude: parseFloat(document.getElementById('originLon').value),
+                    address: document.getElementById('originAddress').value,
+                },
+                destination: {
+                    latitude: parseFloat(document.getElementById('destLat').value),
+                    longitude: parseFloat(document.getElementById('destLon').value),
+                    address: document.getElementById('destAddress').value,
+                },
+                departure_time: new Date().toISOString(),
+                preferences: {
+                    vehicle_type: document.getElementById('vehicleType').value,
+                    allow_carpool: true,
+                    allow_multimodal: true,
+                }
+            };
+            
+            try {
+                const response = await fetch('http://localhost:8000/api/v1/routes/calculate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(payload),
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`API error: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                loading.classList.remove('show');
+                
+                if (data.status === 'success') {
+                    displayRoutes(data.routes);
+                    results.classList.add('show');
+                } else {
+                    showError(data.message || 'Failed to calculate routes');
+                }
+            } catch (err) {
+                loading.classList.remove('show');
+                showError(`Error: ${err.message}`);
+            }
+        });
+        
+        function displayRoutes(routes) {
+            routesList.innerHTML = '';
+            
+            routes.forEach(route => {
+                const routeHTML = `
+                    <div class="route-card">
+                        <div class="route-header">
+                            <div class="route-rank">#${route.rank}</div>
+                            <div class="route-title">
+                                <h3>${route.summary.route_type.toUpperCase()}</h3>
+                                <p>${route.summary.total_distance_km} km · ${route.summary.estimated_time_minutes} min</p>
+                            </div>
+                            <div class="eco-score">
+                                Eco-Score: ${route.summary.eco_cost_score.toFixed(2)}
+                            </div>
+                        </div>
+                        
+                        <div class="route-details">
+                            <div class="detail-item">
+                                <label>Distance</label>
+                                <value>${route.summary.total_distance_km} km</value>
+                            </div>
+                            <div class="detail-item">
+                                <label>Time</label>
+                                <value>${route.summary.estimated_time_minutes} min</value>
+                            </div>
+                            <div class="detail-item">
+                                <label>CO₂ Emissions</label>
+                                <value>${route.summary.estimated_co2_kg} kg</value>
+                            </div>
+                            <div class="detail-item">
+                                <label>Route Type</label>
+                                <value>${route.summary.route_type}</value>
+                            </div>
+                        </div>
+                        
+                        <div class="breakdown">
+                            <h4>Eco-Cost Breakdown</h4>
+                            <div class="component">
+                                <span class="component-name">🚗 Traffic Penalty</span>
+                                <span class="component-value penalty">+${route.eco_cost_breakdown.traffic_penalty.toFixed(2)}</span>
+                            </div>
+                            <div class="component">
+                                <span class="component-name">😷 AQI Penalty</span>
+                                <span class="component-value penalty">+${route.eco_cost_breakdown.aqi_penalty.toFixed(2)}</span>
+                            </div>
+                            <div class="component">
+                                <span class="component-name">⛰️ Gradient Penalty</span>
+                                <span class="component-value penalty">+${route.eco_cost_breakdown.gradient_penalty.toFixed(2)}</span>
+                            </div>
+                            <div class="component">
+                                <span class="component-name">🤝 Carpool Bonus</span>
+                                <span class="component-value bonus">${route.eco_cost_breakdown.carpool_bonus.toFixed(2)}</span>
+                            </div>
+                            <div class="component">
+                                <span class="component-name">🌳 Greenery Bonus</span>
+                                <span class="component-value bonus">${route.eco_cost_breakdown.greenery_bonus.toFixed(2)}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                routesList.innerHTML += routeHTML;
+            });
+        }
+        
+        function showError(message) {
+            error.textContent = message;
+            error.classList.add('show');
+        }
+    </script>
+</body>
+</html>
