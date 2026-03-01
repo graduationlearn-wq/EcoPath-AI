@@ -4,11 +4,13 @@ Route service - business logic for route calculation.
 
 import math
 import logging
+from datetime import datetime
 
 from app.engines.graph_builder import build_osm_network, create_mock_delhi_network
 from app.engines.eco_cost import EcoCostCalculator
 from app.engines.pathfinding import PathfindingEngine
 from app.services.aqi_service import AQIService
+from app.services.weight_service import get_dynamic_weights
 from app.api.schemas.route_schemas import (
     RouteOption,
     RouteSummary,
@@ -86,20 +88,14 @@ class RouteService:
             return create_mock_delhi_network(), origin_lat, origin_lon
 
     def _apply_real_aqi_to_graph(self, graph, center_lat: float, center_lon: float):
-        """
-        Fetch real AQI for the route area and apply it to all edges.
-
-        Currently uses one AQI value for the whole area (one API call).
-        Future improvement: fetch AQI per edge for hyper-local accuracy.
-        """
+        """Fetch real AQI for the route area and apply it to all edges."""
         aqi_value = self.aqi_service.get_aqi_for_route_area(center_lat, center_lon)
         logger.info(f"Real AQI for area: {aqi_value}")
 
-        # Apply to all edges in the graph
         for edge_key in graph.edges_data:
             graph.edges_data[edge_key]['aqi_value'] = aqi_value
 
-        return graph
+        return graph, aqi_value
 
     def calculate_routes(
         self,
@@ -107,18 +103,29 @@ class RouteService:
         origin_lon: float,
         dest_lat: float,
         dest_lon: float,
+        departure_time: datetime = None,
     ) -> list:
         """
         Calculate eco-optimal routes between two coordinates.
-        Works globally — fetches real OSM roads and real AQI data.
+        Uses real OSM roads, real AQI, and dynamic time-based weights.
         """
         # Build road network
         graph, center_lat, center_lon = self._build_graph_for_route(
             origin_lat, origin_lon, dest_lat, dest_lon
         )
 
-        # Apply real AQI to all edges (replaces the hardcoded 100 default)
-        graph = self._apply_real_aqi_to_graph(graph, center_lat, center_lon)
+        # Apply real AQI to all edges
+        graph, aqi_value = self._apply_real_aqi_to_graph(graph, center_lat, center_lon)
+
+        # Get dynamic weights based on time of day and current AQI
+        dynamic_weights = get_dynamic_weights(
+            aqi_value=aqi_value,
+            departure_time=departure_time or datetime.now(),
+        )
+
+        # Update the eco calculator with dynamic weights before pathfinding
+        # This means the pathfinder will use time-aware weights when scoring every edge
+        self.eco_calculator.update_weights(dynamic_weights)
 
         pathfinder = PathfindingEngine(graph, self.eco_calculator)
 
@@ -134,7 +141,7 @@ class RouteService:
             logger.warning("Start and goal are the same node")
             return []
 
-        # Run pathfinding
+        # Run pathfinding with dynamic weights active
         route = pathfinder.find_route(start_node, goal_node)
 
         if not route:
@@ -154,7 +161,7 @@ class RouteService:
                     'name': node_data.get('name', node_id),
                 })
 
-        # Build real eco-cost breakdown averaged across all segments
+        # Build eco-cost breakdown averaged across all segments
         total_traffic = 0.0
         total_aqi = 0.0
         total_gradient = 0.0
