@@ -30,12 +30,13 @@ class RouteCalculationRequest(BaseModel):
 
 
 class EcoCostBreakdown(BaseModel):
-    """Breakdown of eco-cost for a segment."""
+    """Breakdown of eco-cost for a route."""
     traffic_penalty: float
     aqi_penalty: float
     gradient_penalty: float
     carpool_bonus: float
     greenery_bonus: float
+    canyon_penalty: float = 0.0   # Street canyon trap zone penalty
 
 
 class RouteSummary(BaseModel):
@@ -43,7 +44,7 @@ class RouteSummary(BaseModel):
     total_distance_km: float
     estimated_time_minutes: int
     estimated_co2_kg: float
-    route_type: str  # driving, carpool, multimodal
+    route_type: str
     eco_cost_score: float
 
 
@@ -53,11 +54,14 @@ class RouteOption(BaseModel):
     rank: int
     summary: RouteSummary
     eco_cost_breakdown: EcoCostBreakdown
-    route_coordinates: Optional[List[Dict]] = Field(default_factory=list, description="Route waypoints with lat/lon")
+    route_coordinates: Optional[List[Dict]] = Field(
+        default_factory=list,
+        description="Route waypoints with lat/lon"
+    )
 
 
 class RouteCalculationResponse(BaseModel):
     """Response with route options."""
-    status: str  # success or error
+    status: str
     routes: List[RouteOption] = []
     message: Optional[str] = None

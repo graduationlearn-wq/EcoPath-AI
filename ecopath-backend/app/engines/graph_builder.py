@@ -3,35 +3,29 @@ Graph builder for road networks.
 Supports both mock network (for testing) and real OSM network (for production).
 """
 
-import math
+import logging
 import networkx as nx
 from typing import Dict
+
+logger = logging.getLogger(__name__)
 
 
 class RoadNetworkGraph:
     """Represents a road network as a graph."""
-    
+
     def __init__(self):
-        """Initialize the graph."""
         self.graph = nx.DiGraph()
         self.nodes_data = {}
         self.edges_data = {}
-    
-    def add_node(
-        self, 
-        node_id: str, 
-        latitude: float, 
-        longitude: float, 
-        name: str = ""
-    ):
-        """Add a node (intersection) to the graph."""
+
+    def add_node(self, node_id: str, latitude: float, longitude: float, name: str = ""):
         self.graph.add_node(node_id)
         self.nodes_data[node_id] = {
             'latitude': latitude,
             'longitude': longitude,
             'name': name,
         }
-    
+
     def add_edge(
         self,
         from_node: str,
@@ -42,9 +36,7 @@ class RoadNetworkGraph:
         speed_limit_kmh: float = 50.0,
         aqi_value: int = 100,
     ):
-        """Add an edge (road segment) to the graph."""
         self.graph.add_edge(from_node, to_node, weight=distance_km)
-        
         edge_key = (from_node, to_node)
         self.edges_data[edge_key] = {
             'distance_km': distance_km,
@@ -52,128 +44,97 @@ class RoadNetworkGraph:
             'canopy_density_percent': canopy_density_percent,
             'speed_limit_kmh': speed_limit_kmh,
             'aqi_value': aqi_value,
+            'canyon_penalty': 0.0,
+            'canyon_index': 0.0,
+            'canyon_class': 'open',
         }
-    
+
     def get_edge_data(self, from_node: str, to_node: str) -> Dict:
-        """Get data for a specific edge."""
         edge_key = (from_node, to_node)
         return self.edges_data.get(edge_key, {})
-    
+
     def get_node_data(self, node_id: str) -> Dict:
-        """Get data for a specific node."""
         return self.nodes_data.get(node_id, {})
 
 
-def build_osm_network(
-    lat: float,
-    lon: float,
-    radius_m: int = 2000,
-) -> RoadNetworkGraph:
+def build_osm_network(lat: float, lon: float, radius_m: int = 2000) -> RoadNetworkGraph:
     """
     Build a real road network from OpenStreetMap data.
-
-    Fetches all drivable roads within radius_m meters of the given
-    lat/lon coordinate. Works for any location in the world.
-
-    Args:
-        lat: Center latitude
-        lon: Center longitude
-        radius_m: Radius in meters to fetch roads for (default 2km)
-
-    Returns:
-        RoadNetworkGraph populated with real OSM nodes and edges
+    Works for any location in the world.
     """
     try:
         import osmnx as ox
     except ImportError:
-        raise ImportError(
-            "osmnx is required for real road networks. "
-            "Install it with: pip install osmnx"
-        )
+        raise ImportError("osmnx is required. Install with: pip install osmnx")
 
-    # Fetch the drivable road network from OSM around the given point
-    # network_type='drive' gets roads cars can use (no footpaths, no private roads)
     osm_graph = ox.graph_from_point(
         (lat, lon),
         dist=radius_m,
         network_type='drive',
-        simplify=True,        # Merge redundant nodes (straight segments) for cleaner graph
-        retain_all=False,     # Only keep the largest connected component
+        simplify=True,
+        retain_all=False,
     )
-
-    # Convert to undirected to get edges in both directions for routing flexibility
-    # then back to directed so our pathfinding engine works correctly
     osm_graph = ox.convert.to_digraph(osm_graph, weight='length')
 
     road_graph = RoadNetworkGraph()
 
     # --- ADD NODES ---
-    # OSM nodes are intersections. Each has a numeric ID, lat, and lon.
     for node_id, node_data in osm_graph.nodes(data=True):
-        node_lat = node_data.get('y', 0)   # osmnx uses 'y' for latitude
-        node_lon = node_data.get('x', 0)   # osmnx uses 'x' for longitude
-        node_name = str(node_id)            # OSM node IDs are large integers
-
         road_graph.add_node(
             node_id=str(node_id),
-            latitude=node_lat,
-            longitude=node_lon,
-            name=node_name,
+            latitude=node_data.get('y', 0),
+            longitude=node_data.get('x', 0),
+            name=str(node_id),
         )
 
     # --- ADD EDGES ---
-    # OSM edges are road segments between intersections.
-    # We fill in eco fields with realistic defaults since OSM doesn't have AQI/canopy.
-    # These will be replaced with real API data in a future step.
     for from_id, to_id, edge_data in osm_graph.edges(data=True):
-        # Distance: OSM gives length in meters, convert to km
         length_m = edge_data.get('length', 100)
         distance_km = length_m / 1000.0
 
-        # Speed limit: OSM sometimes has maxspeed tag, default to 50 if missing
         raw_speed = edge_data.get('maxspeed', 50)
         if isinstance(raw_speed, list):
-            raw_speed = raw_speed[0]  # Some edges have multiple speed values
+            raw_speed = raw_speed[0]
         try:
             speed_limit_kmh = float(str(raw_speed).replace(' mph', '').replace(' kmh', '').strip())
-            # Convert mph to kmh if needed (some countries use mph)
             if 'mph' in str(raw_speed):
                 speed_limit_kmh = speed_limit_kmh * 1.60934
         except (ValueError, TypeError):
             speed_limit_kmh = 50.0
 
-        # Gradient: OSM rarely has elevation data — default to flat (0%)
-        # Will be replaced with real elevation API (e.g. Open-Elevation) later
-        gradient_percent = 0.0
-
-        # Canopy density: OSM doesn't have this — default to 40% (urban average)
-        # Will be replaced with satellite/NDVI data later
-        canopy_density_percent = 40.0
-
-        # AQI: OSM doesn't have this — default to 100 (moderate, urban average)
-        # Will be replaced with real AQI API later
-        aqi_value = 100
-
         road_graph.add_edge(
             from_node=str(from_id),
             to_node=str(to_id),
             distance_km=distance_km,
-            gradient_percent=gradient_percent,
-            canopy_density_percent=canopy_density_percent,
+            gradient_percent=0.0,
+            canopy_density_percent=40.0,
             speed_limit_kmh=speed_limit_kmh,
-            aqi_value=aqi_value,
+            aqi_value=100,
         )
+
+    # --- ENRICH WITH STREET CANYON DATA ---
+    try:
+        from app.services.street_canyon_service import StreetCanyonService
+        canyon_service = StreetCanyonService()
+        canyon_service.enrich_graph_with_canyon_data(road_graph, osm_graph)
+    except Exception as e:
+        logger.warning(f"Canyon enrichment failed ({e}) — canyon penalties default to 0")
+
+    # --- ENRICH WITH REAL ELEVATION/GRADIENT DATA ---
+    try:
+        from app.services.elevation_service import ElevationService
+        elevation_service = ElevationService()
+        elevation_service.enrich_graph_with_gradients(road_graph)
+    except Exception as e:
+        logger.warning(f"Elevation enrichment failed ({e}) — gradients default to 0")
 
     return road_graph
 
 
 def create_mock_delhi_network() -> RoadNetworkGraph:
-    """
-    Create a mock Delhi road network for offline testing.
-    Used as fallback when OSM fetch fails or for unit tests.
-    """
+    """Mock Delhi network for offline testing / fallback."""
     graph = RoadNetworkGraph()
-    
+
     graph.add_node("connaught_place", 28.6139, 77.2090, "Connaught Place")
     graph.add_node("central_delhi", 28.6050, 77.2300, "Central Delhi")
     graph.add_node("south_delhi", 28.5200, 77.2000, "South Delhi")

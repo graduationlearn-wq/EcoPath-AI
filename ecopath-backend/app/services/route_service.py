@@ -24,16 +24,10 @@ class RouteService:
     """Service for route calculations."""
 
     def __init__(self):
-        """Initialize calculators. Graph is built per-request based on user coordinates."""
         self.eco_calculator = EcoCostCalculator()
         self.aqi_service = AQIService()
 
-    def _haversine_distance(
-        self,
-        lat1: float, lon1: float,
-        lat2: float, lon2: float,
-    ) -> float:
-        """Calculate straight-line distance between two lat/lon points in km."""
+    def _haversine_distance(self, lat1, lon1, lat2, lon2) -> float:
         R = 6371
         dlat = math.radians(lat2 - lat1)
         dlon = math.radians(lon2 - lon1)
@@ -46,10 +40,8 @@ class RouteService:
         return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
     def find_nearest_node(self, graph, latitude: float, longitude: float) -> str:
-        """Find the nearest node in the graph to a given coordinate using haversine distance."""
         nearest_node = None
         min_distance = float('inf')
-
         for node_id, node_data in graph.nodes_data.items():
             dist = self._haversine_distance(
                 latitude, longitude,
@@ -58,21 +50,14 @@ class RouteService:
             if dist < min_distance:
                 min_distance = dist
                 nearest_node = node_id
-
         return nearest_node
 
-    def _build_graph_for_route(
-        self,
-        origin_lat: float, origin_lon: float,
-        dest_lat: float, dest_lon: float,
-    ):
-        """Build an OSM road network covering the area between origin and destination."""
+    def _build_graph_for_route(self, origin_lat, origin_lon, dest_lat, dest_lon):
         center_lat = (origin_lat + dest_lat) / 2
         center_lon = (origin_lon + dest_lon) / 2
 
         half_distance_km = self._haversine_distance(
-            center_lat, center_lon,
-            origin_lat, origin_lon,
+            center_lat, center_lon, origin_lat, origin_lon
         )
         radius_m = int(half_distance_km * 1000 * 1.5)
         radius_m = max(1000, min(radius_m, 15000))
@@ -87,14 +72,11 @@ class RouteService:
             logger.warning(f"OSM fetch failed ({e}), falling back to mock network")
             return create_mock_delhi_network(), origin_lat, origin_lon
 
-    def _apply_real_aqi_to_graph(self, graph, center_lat: float, center_lon: float):
-        """Fetch real AQI for the route area and apply it to all edges."""
+    def _apply_real_aqi_to_graph(self, graph, center_lat, center_lon):
         aqi_value = self.aqi_service.get_aqi_for_route_area(center_lat, center_lon)
         logger.info(f"Real AQI for area: {aqi_value}")
-
         for edge_key in graph.edges_data:
             graph.edges_data[edge_key]['aqi_value'] = aqi_value
-
         return graph, aqi_value
 
     def calculate_routes(
@@ -105,43 +87,36 @@ class RouteService:
         dest_lon: float,
         departure_time: datetime = None,
     ) -> list:
-        """
-        Calculate eco-optimal routes between two coordinates.
-        Uses real OSM roads, real AQI, and dynamic time-based weights.
-        """
+        """Calculate eco-optimal routes using real OSM, AQI, elevation, canyon and dynamic weights."""
+
         # Build road network
         graph, center_lat, center_lon = self._build_graph_for_route(
             origin_lat, origin_lon, dest_lat, dest_lon
         )
 
-        # Apply real AQI to all edges
+        # Apply real AQI
         graph, aqi_value = self._apply_real_aqi_to_graph(graph, center_lat, center_lon)
 
-        # Get dynamic weights based on time of day and current AQI
+        # Get dynamic weights based on time and AQI
         dynamic_weights = get_dynamic_weights(
             aqi_value=aqi_value,
             departure_time=departure_time or datetime.now(),
         )
-
-        # Update the eco calculator with dynamic weights before pathfinding
-        # This means the pathfinder will use time-aware weights when scoring every edge
         self.eco_calculator.update_weights(dynamic_weights)
 
         pathfinder = PathfindingEngine(graph, self.eco_calculator)
 
-        # Find nearest nodes
         start_node = self.find_nearest_node(graph, origin_lat, origin_lon)
         goal_node = self.find_nearest_node(graph, dest_lat, dest_lon)
 
         if not start_node or not goal_node:
-            logger.error("Could not find start or goal node in graph")
+            logger.error("Could not find start or goal node")
             return []
 
         if start_node == goal_node:
             logger.warning("Start and goal are the same node")
             return []
 
-        # Run pathfinding with dynamic weights active
         route = pathfinder.find_route(start_node, goal_node)
 
         if not route:
@@ -150,7 +125,7 @@ class RouteService:
 
         details = pathfinder.get_route_details(route)
 
-        # Build coordinate list for map rendering
+        # Build coordinate list
         route_coordinates = []
         for node_id in route:
             node_data = graph.get_node_data(node_id)
@@ -161,12 +136,13 @@ class RouteService:
                     'name': node_data.get('name', node_id),
                 })
 
-        # Build eco-cost breakdown averaged across all segments
+        # Build real eco-cost breakdown across all segments
         total_traffic = 0.0
         total_aqi = 0.0
         total_gradient = 0.0
         total_carpool = 0.0
         total_greenery = 0.0
+        total_canyon = 0.0
         segment_count = 0
 
         for i in range(len(route) - 1):
@@ -178,12 +154,14 @@ class RouteService:
                     aqi_value=edge_data.get('aqi_value', 100),
                     gradient_percent=edge_data.get('gradient_percent', 0),
                     canopy_density_percent=edge_data.get('canopy_density_percent', 40),
+                    canyon_penalty=edge_data.get('canyon_penalty', 0.0),
                 )
                 total_traffic += components.traffic_penalty
                 total_aqi += components.aqi_penalty
                 total_gradient += components.gradient_penalty
                 total_carpool += components.carpool_bonus
                 total_greenery += components.greenery_bonus
+                total_canyon += components.canyon_penalty
                 segment_count += 1
 
         count = max(segment_count, 1)
@@ -193,6 +171,7 @@ class RouteService:
             gradient_penalty=round(total_gradient / count, 2),
             carpool_bonus=round(total_carpool / count, 2),
             greenery_bonus=round(total_greenery / count, 2),
+            canyon_penalty=round(total_canyon / count, 2),
         )
 
         summary = RouteSummary(

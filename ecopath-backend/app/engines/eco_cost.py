@@ -2,7 +2,7 @@
 Eco-Cost Heuristic Calculator
 
 Computes the eco-cost score for any route using the formula:
-Eco_Score = (Traffic × W₁) + (AQI × W₂) + (Gradient × W₃) - (Carpool × W₄) - (Greenery × W₅)
+Eco_Score = (Traffic × W₁) + (AQI × W₂) + (Gradient × W₃) - (Carpool × W₄) - (Greenery × W₅) + (Canyon × W₆)
 """
 
 from dataclasses import dataclass
@@ -16,6 +16,7 @@ class EcoCostComponents:
     gradient_penalty: float
     carpool_bonus: float
     greenery_bonus: float
+    canyon_penalty: float
     total_eco_cost: float
 
 
@@ -30,13 +31,11 @@ class EcoCostCalculator:
             'W3_gradient': 0.2,
             'W4_carpool': 0.1,
             'W5_greenery': 0.15,
+            'W6_canyon': 0.25,   # Street canyon weight
         }
 
     def update_weights(self, new_weights: dict):
-        """
-        Update weights dynamically.
-        Called by route service with time/AQI adjusted weights before pathfinding.
-        """
+        """Update weights dynamically."""
         self.base_weights.update(new_weights)
 
     @staticmethod
@@ -44,14 +43,10 @@ class EcoCostCalculator:
         """Calculate traffic penalty (0-100)."""
         if free_flow_speed_kmh <= 0:
             return 0
-
         congestion_ratio = max(0, 1 - (current_speed_kmh / free_flow_speed_kmh))
         penalty = congestion_ratio * 100
-
-        # Amplify heavy congestion
         if congestion_ratio > 0.7:
             penalty *= 1.3
-
         return min(penalty, 100)
 
     @staticmethod
@@ -74,7 +69,6 @@ class EcoCostCalculator:
     def calculate_gradient_penalty(gradient_percent: float) -> float:
         """Calculate gradient penalty (0-100)."""
         gradient_abs = abs(gradient_percent)
-
         if gradient_abs <= 1:
             return 0
         elif gradient_abs <= 3:
@@ -115,6 +109,7 @@ class EcoCostCalculator:
         gradient_penalty: float,
         carpool_bonus: float,
         greenery_bonus: float,
+        canyon_penalty: float = 0.0,
     ) -> float:
         """Calculate overall eco-cost for a segment using current weights."""
         W1 = self.base_weights['W1_traffic']
@@ -122,15 +117,16 @@ class EcoCostCalculator:
         W3 = self.base_weights['W3_gradient']
         W4 = self.base_weights['W4_carpool']
         W5 = self.base_weights['W5_greenery']
+        W6 = self.base_weights['W6_canyon']
 
         eco_cost = (
             traffic_penalty * W1 +
             aqi_penalty * W2 +
             gradient_penalty * W3 -
             carpool_bonus * W4 -
-            greenery_bonus * W5
+            greenery_bonus * W5 +
+            canyon_penalty * W6
         )
-
         return max(0, eco_cost)
 
     def analyze_segment(
@@ -141,6 +137,7 @@ class EcoCostCalculator:
         gradient_percent: float,
         canopy_density_percent: float,
         num_carpool_matches: int = 0,
+        canyon_penalty: float = 0.0,
     ) -> EcoCostComponents:
         """Analyze a single road segment."""
         traffic_penalty = self.calculate_traffic_penalty(current_speed_kmh, free_flow_speed_kmh)
@@ -150,7 +147,8 @@ class EcoCostCalculator:
         greenery_bonus = self.calculate_greenery_bonus(canopy_density_percent)
 
         total_eco_cost = self.calculate_segment_eco_cost(
-            traffic_penalty, aqi_penalty, gradient_penalty, carpool_bonus, greenery_bonus
+            traffic_penalty, aqi_penalty, gradient_penalty,
+            carpool_bonus, greenery_bonus, canyon_penalty
         )
 
         return EcoCostComponents(
@@ -159,5 +157,6 @@ class EcoCostCalculator:
             gradient_penalty=gradient_penalty,
             carpool_bonus=carpool_bonus,
             greenery_bonus=greenery_bonus,
+            canyon_penalty=canyon_penalty,
             total_eco_cost=total_eco_cost,
         )
