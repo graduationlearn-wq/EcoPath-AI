@@ -296,3 +296,62 @@ class CacheService:
         except Exception as e:
             logger.warning(f"Route history save failed: {e}")
             self.db.rollback()
+
+# ─────────────────────────────────────────
+    # NDVI / CANOPY CACHE
+    # ─────────────────────────────────────────
+
+    def _ndvi_key(self, lat: float, lon: float) -> tuple:
+        """Round to 2dp for NDVI cache key (~1km grid)."""
+        return (round(lat, 2), round(lon, 2))
+
+    def get_ndvi(self, lat: float, lon: float):
+        """
+        Get cached canopy density if not expired.
+        Returns canopy_percent float or None.
+        """
+        from app.db.models import NDVICache
+        key_lat, key_lon = self._ndvi_key(lat, lon)
+
+        try:
+            record = self.db.query(NDVICache).filter(
+                NDVICache.lat == key_lat,
+                NDVICache.lon == key_lon,
+                NDVICache.expires_at > datetime.utcnow(),
+            ).first()
+
+            if record:
+                logger.debug(f"NDVI cache HIT: ({key_lat},{key_lon}) = {record.canopy_percent}%")
+                return record.canopy_percent
+
+            return None
+
+        except Exception as e:
+            logger.warning(f"NDVI cache read failed: {e}")
+            return None
+
+    def save_ndvi(self, lat: float, lon: float, canopy_percent: float):
+        """Save canopy density to cache. Expires in 30 days."""
+        from app.db.models import NDVICache
+        key_lat, key_lon = self._ndvi_key(lat, lon)
+
+        try:
+            self.db.query(NDVICache).filter(
+                NDVICache.lat == key_lat,
+                NDVICache.lon == key_lon,
+            ).delete()
+
+            record = NDVICache(
+                lat=key_lat,
+                lon=key_lon,
+                canopy_percent=canopy_percent,
+                expires_at=datetime.utcnow() + timedelta(days=30),
+            )
+
+            self.db.add(record)
+            self.db.commit()
+            logger.debug(f"NDVI cached: ({key_lat},{key_lon}) = {canopy_percent}%")
+
+        except Exception as e:
+            logger.warning(f"NDVI cache write failed: {e}")
+            self.db.rollback()

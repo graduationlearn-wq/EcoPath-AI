@@ -117,3 +117,22 @@ class RouteHistory(Base):
     # Metadata
     calculated_at = Column(DateTime, default=datetime.utcnow)
     success = Column(Boolean, default=True)
+
+class NDVICache(Base):
+    """
+    Cached NDVI/canopy density for a coordinate.
+    Keyed by lat/lon rounded to 2dp (~1km grid).
+    Expires after 30 days — vegetation changes slowly.
+    """
+    __tablename__ = "ndvi_cache"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    lat = Column(Float, nullable=False)
+    lon = Column(Float, nullable=False)
+
+    # Canopy density on 0-100% scale
+    canopy_percent = Column(Float, nullable=False)
+
+    fetched_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)  # 30 days

@@ -1,11 +1,10 @@
 """
 Route service - business logic for route calculation.
-Now uses PostgreSQL caching for road networks, AQI, and elevation.
+Now uses PostgreSQL caching for road networks, AQI, elevation and NDVI.
 """
 
 import math
 import logging
-import json
 from datetime import datetime
 
 from app.engines.graph_builder import build_osm_network, create_mock_delhi_network, RoadNetworkGraph
@@ -59,24 +58,34 @@ class RouteService:
         graph = RoadNetworkGraph()
         graph.nodes_data = nodes
 
-        # Restore edge keys from "from|to" strings back to tuples
         for key_str, edge_data in edges.items():
             parts = key_str.split('|')
             edge_key = (parts[0], parts[1])
             graph.edges_data[edge_key] = edge_data
             graph.graph.add_edge(parts[0], parts[1], weight=edge_data.get('distance_km', 0))
 
-        # Rebuild node entries in networkx graph
         for node_id in nodes:
             graph.graph.add_node(node_id)
 
         return graph
+
+    def _enrich_with_ndvi(self, graph, db=None):
+        """
+        Enrich graph edges with real canopy density from NDVI service.
+        Runs after both cache hits and fresh OSM builds.
+        """
+        try:
+            from app.services.ndvi_service import NDVIService
+            NDVIService().enrich_graph_with_canopy(graph, db=db)
+        except Exception as e:
+            logger.warning(f"NDVI enrichment failed ({e}) — canopy defaults to 40%")
 
     def _build_graph_for_route(self, origin_lat, origin_lon, dest_lat, dest_lon, db=None):
         """
         Build road network — checks DB cache first.
         Cache HIT: loads instantly from DB (~0.1s)
         Cache MISS: fetches from OSM, saves to DB for next time (~10s)
+        NDVI enrichment runs after both cases.
         """
         center_lat = (origin_lat + dest_lat) / 2
         center_lon = (origin_lon + dest_lon) / 2
@@ -97,6 +106,8 @@ class RouteService:
                     nodes, edges = cached
                     graph = self._restore_graph_from_cache(nodes, edges)
                     logger.info(f"Road network loaded from DB cache: {len(graph.nodes_data)} nodes")
+                    # NDVI not stored in road cache — enrich after loading
+                    self._enrich_with_ndvi(graph, db=db)
                     return graph, center_lat, center_lon
             except Exception as e:
                 logger.warning(f"Road network DB cache check failed: {e}")
@@ -107,7 +118,10 @@ class RouteService:
             graph = build_osm_network(center_lat, center_lon, radius_m)
             logger.info(f"OSM graph built: {len(graph.nodes_data)} nodes, {len(graph.edges_data)} edges")
 
-            # Save to DB cache for next request
+            # Enrich with NDVI
+            self._enrich_with_ndvi(graph, db=db)
+
+            # Save to DB cache
             if db:
                 try:
                     from app.db.cache_service import CacheService
@@ -144,12 +158,10 @@ class RouteService:
     ) -> list:
         """
         Calculate eco-optimal routes.
-        Uses DB cache for road network, AQI, and elevation.
-        First request: ~10s (fetches from APIs, saves to DB)
-        Repeat requests: ~0.5s (loads from DB cache)
+        Uses DB cache for road network, AQI, elevation and NDVI.
         """
 
-        # Build road network (cache aware)
+        # Build road network (cache aware, NDVI enriched)
         graph, center_lat, center_lon = self._build_graph_for_route(
             origin_lat, origin_lon, dest_lat, dest_lon, db=db
         )
@@ -235,7 +247,7 @@ class RouteService:
                     origin_lat=origin_lat, origin_lon=origin_lon,
                     dest_lat=dest_lat, dest_lon=dest_lon,
                     distance_km=float(round(details['total_distance_km'], 2)),
-                    duration_minutes=details['estimated_time_minutes'],
+                    duration_minutes=int(details['estimated_time_minutes']),
                     eco_score=float(round(details['total_eco_cost'], 2)),
                     co2_kg=float(details['estimated_co2_kg']),
                     aqi_penalty=round(total_aqi / count, 2),
