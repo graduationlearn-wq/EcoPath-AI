@@ -2,7 +2,8 @@
 API endpoints for route calculation.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy.orm import Session
 import logging
 
 from app.api.schemas.route_schemas import (
@@ -10,6 +11,7 @@ from app.api.schemas.route_schemas import (
     RouteCalculationResponse,
 )
 from app.services.route_service import RouteService
+from app.db.database import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -18,37 +20,39 @@ router = APIRouter(
     tags=["routes"],
 )
 
-# Initialize service
 route_service = RouteService()
 
 
 @router.post("/calculate", response_model=RouteCalculationResponse)
-async def calculate_routes(request: RouteCalculationRequest):
+async def calculate_routes(
+    request: RouteCalculationRequest,
+    db: Session = Depends(get_db),
+):
     """Calculate eco-optimal routes."""
-    
     try:
         logger.info(f"Route calculation: {request.origin.address} → {request.destination.address}")
-        
-        # Calculate routes using the service
+
         routes = route_service.calculate_routes(
             origin_lat=request.origin.latitude,
             origin_lon=request.origin.longitude,
             dest_lat=request.destination.latitude,
             dest_lon=request.destination.longitude,
+            departure_time=request.departure_time,
+            db=db,
         )
-        
+
         if not routes:
             return RouteCalculationResponse(
                 status="error",
                 message="No route found between these locations",
             )
-        
+
         return RouteCalculationResponse(
             status="success",
             routes=routes,
             message="Routes calculated successfully",
         )
-    
+
     except Exception as e:
         logger.error(f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

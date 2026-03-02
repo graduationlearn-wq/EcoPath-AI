@@ -10,6 +10,7 @@ import os
 
 from app.config import settings
 from app.api.routes import routes
+from app.db.database import init_db
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -36,7 +37,14 @@ app.add_middleware(
 app.include_router(routes.router)
 
 
-# Serve index.html
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database tables on startup."""
+    logger.info("Initializing database...")
+    init_db()
+    logger.info("Database ready.")
+
+
 @app.get("/", response_class=FileResponse)
 async def get_index():
     """Serve the frontend."""
@@ -44,7 +52,6 @@ async def get_index():
     return index_path
 
 
-# Health check
 @app.get("/health")
 async def health():
     """Health check endpoint."""

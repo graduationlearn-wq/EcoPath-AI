@@ -1,12 +1,14 @@
 """
 Route service - business logic for route calculation.
+Now uses PostgreSQL caching for road networks, AQI, and elevation.
 """
 
 import math
 import logging
+import json
 from datetime import datetime
 
-from app.engines.graph_builder import build_osm_network, create_mock_delhi_network
+from app.engines.graph_builder import build_osm_network, create_mock_delhi_network, RoadNetworkGraph
 from app.engines.eco_cost import EcoCostCalculator
 from app.engines.pathfinding import PathfindingEngine
 from app.services.aqi_service import AQIService
@@ -52,7 +54,30 @@ class RouteService:
                 nearest_node = node_id
         return nearest_node
 
-    def _build_graph_for_route(self, origin_lat, origin_lon, dest_lat, dest_lon):
+    def _restore_graph_from_cache(self, nodes: dict, edges: dict) -> RoadNetworkGraph:
+        """Rebuild a RoadNetworkGraph from cached node/edge dicts."""
+        graph = RoadNetworkGraph()
+        graph.nodes_data = nodes
+
+        # Restore edge keys from "from|to" strings back to tuples
+        for key_str, edge_data in edges.items():
+            parts = key_str.split('|')
+            edge_key = (parts[0], parts[1])
+            graph.edges_data[edge_key] = edge_data
+            graph.graph.add_edge(parts[0], parts[1], weight=edge_data.get('distance_km', 0))
+
+        # Rebuild node entries in networkx graph
+        for node_id in nodes:
+            graph.graph.add_node(node_id)
+
+        return graph
+
+    def _build_graph_for_route(self, origin_lat, origin_lon, dest_lat, dest_lon, db=None):
+        """
+        Build road network — checks DB cache first.
+        Cache HIT: loads instantly from DB (~0.1s)
+        Cache MISS: fetches from OSM, saves to DB for next time (~10s)
+        """
         center_lat = (origin_lat + dest_lat) / 2
         center_lon = (origin_lon + dest_lon) / 2
 
@@ -62,18 +87,47 @@ class RouteService:
         radius_m = int(half_distance_km * 1000 * 1.5)
         radius_m = max(1000, min(radius_m, 15000))
 
-        logger.info(f"Fetching OSM network: center=({center_lat:.4f},{center_lon:.4f}), radius={radius_m}m")
+        # 1. Check DB cache
+        if db:
+            try:
+                from app.db.cache_service import CacheService
+                cache = CacheService(db)
+                cached = cache.get_road_network(center_lat, center_lon, radius_m)
+                if cached:
+                    nodes, edges = cached
+                    graph = self._restore_graph_from_cache(nodes, edges)
+                    logger.info(f"Road network loaded from DB cache: {len(graph.nodes_data)} nodes")
+                    return graph, center_lat, center_lon
+            except Exception as e:
+                logger.warning(f"Road network DB cache check failed: {e}")
 
+        # 2. Fetch from OSM
+        logger.info(f"Fetching OSM network: center=({center_lat:.4f},{center_lon:.4f}), radius={radius_m}m")
         try:
             graph = build_osm_network(center_lat, center_lon, radius_m)
             logger.info(f"OSM graph built: {len(graph.nodes_data)} nodes, {len(graph.edges_data)} edges")
+
+            # Save to DB cache for next request
+            if db:
+                try:
+                    from app.db.cache_service import CacheService
+                    cache = CacheService(db)
+                    cache.save_road_network(
+                        center_lat, center_lon, radius_m,
+                        graph.nodes_data,
+                        graph.edges_data,
+                    )
+                except Exception as e:
+                    logger.warning(f"Road network DB cache save failed: {e}")
+
             return graph, center_lat, center_lon
+
         except Exception as e:
             logger.warning(f"OSM fetch failed ({e}), falling back to mock network")
             return create_mock_delhi_network(), origin_lat, origin_lon
 
-    def _apply_real_aqi_to_graph(self, graph, center_lat, center_lon):
-        aqi_value = self.aqi_service.get_aqi_for_route_area(center_lat, center_lon)
+    def _apply_real_aqi_to_graph(self, graph, center_lat, center_lon, db=None):
+        aqi_value = self.aqi_service.get_aqi_for_route_area(center_lat, center_lon, db=db)
         logger.info(f"Real AQI for area: {aqi_value}")
         for edge_key in graph.edges_data:
             graph.edges_data[edge_key]['aqi_value'] = aqi_value
@@ -86,18 +140,26 @@ class RouteService:
         dest_lat: float,
         dest_lon: float,
         departure_time: datetime = None,
+        db=None,
     ) -> list:
-        """Calculate eco-optimal routes using real OSM, AQI, elevation, canyon and dynamic weights."""
+        """
+        Calculate eco-optimal routes.
+        Uses DB cache for road network, AQI, and elevation.
+        First request: ~10s (fetches from APIs, saves to DB)
+        Repeat requests: ~0.5s (loads from DB cache)
+        """
 
-        # Build road network
+        # Build road network (cache aware)
         graph, center_lat, center_lon = self._build_graph_for_route(
-            origin_lat, origin_lon, dest_lat, dest_lon
+            origin_lat, origin_lon, dest_lat, dest_lon, db=db
         )
 
-        # Apply real AQI
-        graph, aqi_value = self._apply_real_aqi_to_graph(graph, center_lat, center_lon)
+        # Apply real AQI (cache aware)
+        graph, aqi_value = self._apply_real_aqi_to_graph(
+            graph, center_lat, center_lon, db=db
+        )
 
-        # Get dynamic weights based on time and AQI
+        # Dynamic weights
         dynamic_weights = get_dynamic_weights(
             aqi_value=aqi_value,
             departure_time=departure_time or datetime.now(),
@@ -125,7 +187,6 @@ class RouteService:
 
         details = pathfinder.get_route_details(route)
 
-        # Build coordinate list
         route_coordinates = []
         for node_id in route:
             node_data = graph.get_node_data(node_id)
@@ -136,7 +197,6 @@ class RouteService:
                     'name': node_data.get('name', node_id),
                 })
 
-        # Build real eco-cost breakdown across all segments
         total_traffic = 0.0
         total_aqi = 0.0
         total_gradient = 0.0
@@ -163,6 +223,31 @@ class RouteService:
                 total_greenery += components.greenery_bonus
                 total_canyon += components.canyon_penalty
                 segment_count += 1
+
+        # Save to route history
+        if db:
+            try:
+                from app.db.cache_service import CacheService
+                from app.services.weight_service import get_time_period
+                cache = CacheService(db)
+                count = max(segment_count, 1)
+                cache.save_route_history(
+                    origin_lat=origin_lat, origin_lon=origin_lon,
+                    dest_lat=dest_lat, dest_lon=dest_lon,
+                    distance_km=float(round(details['total_distance_km'], 2)),
+                    duration_minutes=details['estimated_time_minutes'],
+                    eco_score=float(round(details['total_eco_cost'], 2)),
+                    co2_kg=float(details['estimated_co2_kg']),
+                    aqi_penalty=round(total_aqi / count, 2),
+                    gradient_penalty=round(total_gradient / count, 2),
+                    canyon_penalty=round(total_canyon / count, 2),
+                    greenery_bonus=round(total_greenery / count, 2),
+                    aqi_value=aqi_value,
+                    time_period=get_time_period((departure_time or datetime.now()).hour),
+                    vehicle_type='ice',
+                )
+            except Exception as e:
+                logger.warning(f"Route history save failed: {e}")
 
         count = max(segment_count, 1)
         breakdown = EcoCostBreakdown(
