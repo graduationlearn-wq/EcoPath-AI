@@ -1,42 +1,50 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+/* src/App.css */
+
+/* Remove any default styles that might conflict */
+body {
+  margin: 0;
+  padding: 0;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+/* Custom focus ring for accessibility */
+*:focus-visible {
+  outline: 2px solid #22c55e;
+  outline-offset: 2px;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
+/* Disable default outline on buttons */
+button:focus-visible {
+  outline: 2px solid #22c55e;
+  outline-offset: 2px;
 }
 
-.card {
-  padding: 2em;
+/* Smooth transitions for interactive elements */
+a,
+button,
+input,
+select,
+textarea {
+  transition: all 0.2s ease;
 }
 
-.read-the-docs {
-  color: #888;
+/* Custom placeholder styling */
+::placeholder {
+  color: #9ca3af;
+  opacity: 1;
+}
+
+/* Selection color */
+::selection {
+  background-color: #22c55e;
+  color: white;
+}
+
+::-moz-selection {
+  background-color: #22c55e;
+  color: white;
 }
