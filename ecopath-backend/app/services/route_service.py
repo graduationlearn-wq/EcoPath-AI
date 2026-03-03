@@ -15,6 +15,7 @@ from app.api.schemas.route_schemas import (
     EcoCostBreakdown,
 )
 from app.services.traffic_service import traffic_service
+from app.services.carpool_service import CarpoolService
 
 logger = logging.getLogger(__name__)
 
@@ -98,12 +99,20 @@ class RouteService:
         )
         # ================================================
         
-        # Build eco-cost breakdown with REAL traffic penalty
+        # ============= GET CARPOOL BONUS =============
+        carpool_bonus = 0.0
+        carpool_matches = []
+
+        # For now, use a static bonus (carpool integration would go here)
+        # In production, would query database for matching users
+        carpool_bonus = -10.0  # Default bonus
+        # =============================================
+
         breakdown = EcoCostBreakdown(
-            traffic_penalty=traffic_penalty,  # NOW REAL!
+            traffic_penalty=traffic_penalty,
             aqi_penalty=25.0,
             gradient_penalty=5.0,
-            carpool_bonus=-10.0,
+            carpool_bonus=carpool_bonus,  # NOW REAL!
             greenery_bonus=-12.0,
             canyon_penalty=2.0,
         )

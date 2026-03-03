@@ -40,7 +40,6 @@ class CarpoolService:
     def find_matches(
         db: Session,
         user: CarpoolUser,
-        all_routes: List[Dict] = None,  # For context
     ) -> List[Dict]:
         """
         Find best carpool matches for a user.
@@ -213,7 +212,7 @@ class CarpoolService:
         Estimate CO2 saved by carpooling.
         
         Typical car: 0.2 kg CO2 per km
-        Shared by 2 people: 0.1 kg CO2 per person per km
+        Shared by 2 people: 0.1 kg CO2 per person
         """
         
         # Assume 10 km average trip
@@ -263,11 +262,11 @@ class CarpoolService:
             passenger_id=passenger_id,
             route_overlap=route_overlap,
             time_overlap=time_overlap,
-            location_proximity=(route_overlap + time_overlap) / 2,  # Rough estimate
+            location_proximity=(route_overlap + time_overlap) / 2,
             match_score=match_score,
             co2_saved_kg=co2_saved,
             cost_saved_rupees=cost_saved,
-            eco_improvement=match_score / 100,  # Normalized to 0-1
+            eco_improvement=match_score / 100,
         )
         
         db.add(match)
