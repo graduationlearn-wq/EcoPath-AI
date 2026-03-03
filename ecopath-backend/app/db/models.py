@@ -1,138 +1,111 @@
 """
-Database models for EcoPath AI.
-
-Tables:
-    - road_networks   : Cached OSM road graphs per area (expires 7 days)
-    - aqi_cache       : Cached AQI readings per location (expires 30 mins)
-    - elevation_cache : Cached elevation per coordinate (never expires)
-    - route_history   : Every route calculated (for future ML training)
+Database models for carpool matching.
 """
 
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, JSON
+from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
-from sqlalchemy import Column, String, Float, Integer, DateTime, Text, Boolean
-from app.db.database import Base
+import uuid
+
+Base = declarative_base()
 
 
-class RoadNetwork(Base):
-    """
-    Cached OSM road network for a geographic area.
-    Keyed by center lat/lon rounded to 3dp and radius.
-    Stores full node/edge data as JSON string.
-    """
-    __tablename__ = "road_networks"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    # Area identifier
-    center_lat = Column(Float, nullable=False)
-    center_lon = Column(Float, nullable=False)
-    radius_m = Column(Integer, nullable=False)
-
-    # Stored graph data as JSON
-    nodes_json = Column(Text, nullable=False)   # JSON string of all nodes
-    edges_json = Column(Text, nullable=False)   # JSON string of all edges
-
-    # Metadata
-    node_count = Column(Integer, default=0)
-    edge_count = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    expires_at = Column(DateTime, nullable=False)  # 7 days from creation
-
-
-class AQICache(Base):
-    """
-    Cached AQI reading for a geographic area.
-    Keyed by lat/lon rounded to 2dp (~1km grid).
-    Expires after 30 minutes.
-    """
-    __tablename__ = "aqi_cache"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    # Location (rounded to 2dp)
-    lat = Column(Float, nullable=False)
-    lon = Column(Float, nullable=False)
-
-    # AQI value on our 0-500 scale
-    aqi_value = Column(Integer, nullable=False)
-
-    # Metadata
-    fetched_at = Column(DateTime, default=datetime.utcnow)
-    expires_at = Column(DateTime, nullable=False)  # 30 mins from fetch
-
-
-class ElevationCache(Base):
-    """
-    Cached elevation for a coordinate.
-    Keyed by lat/lon rounded to 4dp (~11m grid).
-    Never expires — elevation doesn't change.
-    """
-    __tablename__ = "elevation_cache"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    # Location (rounded to 4dp)
-    lat = Column(Float, nullable=False)
-    lon = Column(Float, nullable=False)
-
-    # Elevation in meters
-    elevation_m = Column(Float, nullable=False)
-
-    # Metadata
-    fetched_at = Column(DateTime, default=datetime.utcnow)
-
-
-class RouteHistory(Base):
-    """
-    Every route calculated by the system.
-    Stored for analytics and future ML training data.
-    """
-    __tablename__ = "route_history"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    # Request
+class CarpoolUser(Base):
+    """A user looking for a carpool match."""
+    
+    __tablename__ = "carpool_users"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False, unique=True)
+    name = Column(String, nullable=False)
+    phone = Column(String, nullable=False)
+    
+    # Current location
     origin_lat = Column(Float, nullable=False)
     origin_lon = Column(Float, nullable=False)
+    origin_address = Column(String)
+    
+    # Destination
     dest_lat = Column(Float, nullable=False)
     dest_lon = Column(Float, nullable=False)
+    dest_address = Column(String)
+    
+    # Timing
+    departure_time = Column(DateTime, nullable=False)
+    
+    # Preferences
+    is_driver = Column(Boolean, default=False)  # True = offering ride, False = seeking ride
+    car_type = Column(String, default="sedan")  # sedan, suv, hatchback
+    max_passengers = Column(Integer, default=4)  # For drivers
+    
+    # Eco preferences
+    preferred_eco_score = Column(Float)  # Minimum acceptable eco-score
+    
+    # Status
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime)  # Ride request expires after this time
+    
+    def __repr__(self):
+        role = "Driver" if self.is_driver else "Passenger"
+        return f"<CarpoolUser {role}: {self.name} ({self.user_id})>"
 
-    # Result
+
+class CarpoolMatch(Base):
+    """A successful carpool match."""
+    
+    __tablename__ = "carpool_matches"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    driver_id = Column(String, nullable=False)
+    passenger_id = Column(String, nullable=False)
+    
+    # Match quality metrics
+    route_overlap = Column(Float)  # 0-1, how much route overlaps
+    time_overlap = Column(Float)  # 0-1, how aligned departure times are
+    location_proximity = Column(Float)  # 0-1, how close origins/destinations are
+    match_score = Column(Float)  # Combined score 0-100
+    
+    # Estimated savings
+    co2_saved_kg = Column(Float)  # Per passenger
+    cost_saved_rupees = Column(Float)
+    eco_improvement = Column(Float)  # Eco-score improvement
+    
+    # Status
+    status = Column(String, default="pending")  # pending, accepted, completed, cancelled
+    created_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+    
+    def __repr__(self):
+        return f"<CarpoolMatch {self.driver_id}→{self.passenger_id}: {self.match_score:.1f}>"
+
+
+class CarpoolRideShare(Base):
+    """A completed ride share (for history)."""
+    
+    __tablename__ = "carpool_ride_shares"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    match_id = Column(String, nullable=False)
+    
+    # Route taken
+    origin_lat = Column(Float)
+    origin_lon = Column(Float)
+    dest_lat = Column(Float)
+    dest_lon = Column(Float)
     distance_km = Column(Float)
     duration_minutes = Column(Integer)
-    eco_score = Column(Float)
-    co2_kg = Column(Float)
-
-    # Eco breakdown
-    aqi_penalty = Column(Float)
-    gradient_penalty = Column(Float)
-    canyon_penalty = Column(Float)
-    greenery_bonus = Column(Float)
-
-    # Context
-    aqi_value = Column(Integer)
-    time_period = Column(String(20))   # morning_peak, evening_peak, night, normal
-    vehicle_type = Column(String(10))  # ice, ev, hybrid
-
-    # Metadata
-    calculated_at = Column(DateTime, default=datetime.utcnow)
-    success = Column(Boolean, default=True)
-
-class NDVICache(Base):
-    """
-    Cached NDVI/canopy density for a coordinate.
-    Keyed by lat/lon rounded to 2dp (~1km grid).
-    Expires after 30 days — vegetation changes slowly.
-    """
-    __tablename__ = "ndvi_cache"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-
-    lat = Column(Float, nullable=False)
-    lon = Column(Float, nullable=False)
-
-    # Canopy density on 0-100% scale
-    canopy_percent = Column(Float, nullable=False)
-
-    fetched_at = Column(DateTime, default=datetime.utcnow)
-    expires_at = Column(DateTime, nullable=False)  # 30 days
+    
+    # Results
+    co2_saved_kg = Column(Float)
+    cost_saved_rupees = Column(Float)
+    
+    # Ratings
+    driver_rating = Column(Integer)  # 1-5
+    passenger_rating = Column(Integer)  # 1-5
+    notes = Column(String)
+    
+    completed_at = Column(DateTime, default=datetime.utcnow)
+    
+    def __repr__(self):
+        return f"<RideShare {self.match_id}: {self.distance_km:.1f}km, CO2 saved: {self.co2_saved_kg:.2f}kg>"
